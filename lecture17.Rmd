@@ -1,0 +1,241 @@
+---
+title: "lecture17"
+output: github_document
+---
+
+```{r, eval=FALSE }
+install.packages(c("igraph", "RColorBrewer"))
+source("http://bioconductor.org/biocLite.R")
+biocLite("RCy3")
+```
+
+```{r, echo=FALSE}
+library(RCy3)
+library(igraph)
+library(RColorBrewer)
+```
+
+```{r}
+cwd <-demoSimpleGraph()
+
+layoutNetwork(cwd, 'force-directed')
+
+#choose any of the other possible layouts e.g.
+possible.layout.names <- getLayoutNames(cwd)
+
+#test the connection to Cytoscape
+ping(cwd)
+
+setVisualStyle(cwd, "Marquee")
+
+styles <- getVisualStyleNames(cwd)
+
+setVisualStyle(cwd, styles[13])
+```
+
+```{r}
+prok_vir_cor <-read.delim("virus_prok_cor_abundant.tsv", stringsAsFactors = FALSE)
+
+g <- graph.data.frame(prok_vir_cor,directed = FALSE)
+
+class(g)
+
+plot(g, vertex.size=3, vertex.label=NA)
+
+#to find the vertex labels 
+#and to find the edges functions  is E() V(g)
+
+
+```
+```{r}
+phage_id_affiliation <- read.delim("phage_ids_with_affiliation.tsv")
+head(phage_id_affiliation)
+
+bac_id_affi <- read.delim("prok_tax_from_silva.tsv")
+head(bac_id_affi)
+```
+
+```{r}
+#create our gene network for cytoscape
+genenet.nodes <- as.data.frame(vertex.attributes(g))
+
+#not all are classified so create empty columns
+genenet.nodes$phage_aff <- rep("not_class", nrow(genenet.nodes))
+genenet.nodes$Tax_order <- rep("not_class", nrow(genenet.nodes))
+genenet.nodes$Tax_subfamily <- rep("not_class", nrow(genenet.nodes))
+
+for (row in seq_along(1:nrow(genenet.nodes))){
+  if (genenet.nodes$name[row] %in% phage_id_affiliation$first_sheet.Phage_id_network){
+    id_name <- as.character(genenet.nodes$name[row])
+    aff_to_add <- unique(subset(phage_id_affiliation,
+                                first_sheet.Phage_id_network == id_name,
+                                select = c(phage_affiliation,
+                                           Tax_order,
+                                           Tax_subfamily)))
+    genenet.nodes$phage_aff[row] <- as.character(aff_to_add$phage_affiliation)
+    genenet.nodes$Tax_order[row] <- as.character(aff_to_add$Tax_order)
+    genenet.nodes$Tax_subfamily[row] <- as.character(aff_to_add$Tax_subfamily)
+  }
+}
+
+
+```
+
+```{r}
+## do the same for proks
+genenet.nodes$prok_king <- rep("not_class", nrow(genenet.nodes))
+genenet.nodes$prok_tax_phylum <- rep("not_class", nrow(genenet.nodes))
+genenet.nodes$prok_tax_class <- rep("not_class", nrow(genenet.nodes))
+
+for (row in seq_along(1:nrow(genenet.nodes))){
+  if (genenet.nodes$name[row] %in% bac_id_affi$Accession_ID){
+    aff_to_add <- unique(subset(bac_id_affi,
+                                Accession_ID == as.character(genenet.nodes$name[row]),
+                                select = c(Kingdom,
+                                           Phylum,
+                                           Class)))
+    
+    genenet.nodes$prok_king[row] <- as.character(aff_to_add$Kingdom)
+    genenet.nodes$prok_tax_phylum[row] <- as.character(aff_to_add$Phylum)
+    genenet.nodes$prok_tax_class[row] <- as.character(aff_to_add$Class)
+  }
+}
+```
+
+```{r}
+genenet.edges <- data.frame(igraph::as_edgelist(g))
+names(genenet.edges) <- c("name.1", "name.2")
+
+genenet.edges$Weight <- igraph::edge_attr(g)[[1]]
+
+genenet.edges$name.1 <- as.character(genenet.edges$name.1)
+genenet.edges$name.2 <- as.character(genenet.edges$name.2)
+genenet.nodes$name <- as.character(genenet.nodes$name)
+
+ug <- cyPlot(genenet.nodes,genenet.edges)
+```
+
+```{r}
+#send network to cytoscape
+cy <-CytoscapeConnection()
+deleteAllWindows(cy)
+
+cw <- CytoscapeWindow("Tara oceans", graph =ug, overwriteWindow = TRUE)
+
+displayGraph(cw)
+layoutNetwork(cw)
+fitContent(cw)
+```
+
+```{r}
+#colouring
+families_to_colour <- unique(genenet.nodes$prok_tax_phylum)
+families_to_colour <- families_to_colour[!families_to_colour %in% "not_class"]
+node.colour <- RColorBrewer::brewer.pal(length(families_to_colour), "Set3")
+
+setNodeColorRule(cw,
+                 "prok_tax_phylum",
+                 families_to_colour,
+                 node.colour,
+                 "lookup",
+                 default.color = "#ffffff")
+```
+
+```{r}
+displayGraph(cw)
+layoutNetwork(cw)
+fitContent(cw)
+```
+```{r}
+shapes_for_nodes <- c("DIAMOND")
+
+phage_names <- grep("ph_",
+                    genenet.nodes$name,
+                    value = TRUE)
+setNodeShapeRule(cw,
+                 "label",
+                 phage_names,
+                 shapes_for_nodes)
+
+displayGraph(cw)
+fitContent(cw)
+
+```
+
+```{r}
+#get new layout names 
+getLayoutNames(cw)
+
+getLayoutPropertyNames(cw, layout.name = "force-directed")
+
+getLayoutPropertyValue(cw, "force-directed", "defaultSpringLength")
+
+getLayoutPropertyValue(cw, "force-directed", "numIterations")
+
+
+#once we decide on the properties we want
+setLayoutProperties(cw, layout.name = "force-directed", list(defaultSpringLength=20, "numIterations"=200))
+
+layoutNetwork(cw, layout.name = "force-directed")
+fitContent(cw)
+```
+```{r}
+## initiate a new node attribute
+ug2 <- initNodeAttribute(graph = ug,
+                          "degree",
+                          "numeric",
+                          0.0) 
+
+## degree from graph package for undirected graphs not working well,
+## so instead using igraph to calculate this from the original graph
+nodeData(ug2, nodes(ug2), "degree") <- igraph::degree(g)
+
+cw2 <- CytoscapeWindow("Tara oceans with degree",
+                      graph = ug2,
+                      overwriteWindow = TRUE)
+displayGraph(cw2)
+layoutNetwork(cw2)
+```
+
+```{r}
+degree_control_points <- c(min(igraph::degree(g)),
+                           mean(igraph::degree(g)),
+                           max(igraph::degree(g)))
+node_sizes <- c(20,
+                20,
+                80,
+                100,
+                110) # number of control points in interpolation mode,
+                     # the first and the last are for sizes "below" and "above" the attribute seen.
+
+setNodeSizeRule(cw2,
+                "degree",
+                degree_control_points,
+                node_sizes,
+                mode = "interpolate")
+## Locked node dimensions successfully even if the check box is not ticked.
+## Locked node dimensions successfully even if the check box is not ticked.
+## Successfully set rule.
+layoutNetwork(cw2,
+              "force-directed")
+```
+
+```{r}
+# Selects the node named "GQ377772"
+selectNodes(cw2, "GQ377772") 
+getSelectedNodes(cw2)
+
+selectFirstNeighborsOfSelectedNodes(cw2)
+getSelectedNodes(cw2)
+
+selectFirstNeighborsOfSelectedNodes(cw2)
+getSelectedNodes(cw2)
+
+newnet <- createWindowFromSelection(cw2,
+                                    "subnet",
+                                    "TRUE")
+
+layoutNetwork(newnet, "force-directed")
+
+```
+
